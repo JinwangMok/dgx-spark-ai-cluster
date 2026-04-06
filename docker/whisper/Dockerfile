@@ -25,7 +25,8 @@ RUN pip install --no-cache-dir \
     fastapi==0.115.0 \
     uvicorn[standard]==0.34.0 \
     python-multipart==0.0.20 \
-    numpy==2.1.0
+    numpy==2.1.0 \
+    requests
 
 # Copy the server application
 COPY server.py /app/server.py
