@@ -107,7 +107,7 @@ scp "$SCRIPT_DIR/.env" "${SSH_TARGET}:${REMOTE_DIR}/.env"
 ssh "$SSH_TARGET" "chmod 600 ${REMOTE_DIR}/.env"
 
 # Create token-only file for Docker env_file (avoids exposing full .env)
-echo "HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}" > "$SCRIPT_DIR/.env.token"
+printf 'HUGGING_FACE_HUB_TOKEN=%s\n' "$HF_TOKEN" > "$SCRIPT_DIR/.env.token"
 chmod 600 "$SCRIPT_DIR/.env.token"
 scp "$SCRIPT_DIR/.env.token" "${SSH_TARGET}:${REMOTE_DIR}/.env.token"
 ssh "$SSH_TARGET" "chmod 600 ${REMOTE_DIR}/.env.token"
@@ -118,7 +118,7 @@ echo ""
 # ─── Step 3: Parallel Node Setup ───
 
 # Ensure local .env.token exists for Docker env_file
-echo "HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}" > "$SCRIPT_DIR/.env.token"
+printf 'HUGGING_FACE_HUB_TOKEN=%s\n' "$HF_TOKEN" > "$SCRIPT_DIR/.env.token"
 chmod 600 "$SCRIPT_DIR/.env.token"
 
 echo "[Step 3/5] Setting up services on both nodes (parallel)..."
@@ -137,8 +137,10 @@ NODE_B_PID=$!
 
 # Run Node A setup in foreground (without nginx LB — started separately after)
 echo "  Starting Node A setup (foreground)..."
+set +e
 bash scripts/setup-node.sh --role nodeA --skip-lb 2>&1 | tee /tmp/dgx-spark-setup/nodeA.log
 NODE_A_STATUS=${PIPESTATUS[0]}
+set -e
 
 # Wait for Node B
 echo ""
@@ -172,15 +174,19 @@ echo ""
 echo "[Step 4/5] Starting nginx load balancer on Node A..."
 
 # Generate nginx.conf from template
-envsubst '${NODE_A_IP} ${NODE_B_IP}' \
-    < config/nginx.conf.template \
-    > config/nginx.conf
+if command -v envsubst &> /dev/null; then
+    envsubst '${NODE_A_IP} ${NODE_B_IP}' < config/nginx.conf.template > config/nginx.conf
+else
+    echo "  WARNING: envsubst not found, using sed fallback"
+    sed -e "s/\${NODE_A_IP}/${NODE_A_IP}/g" -e "s/\${NODE_B_IP}/${NODE_B_IP}/g" \
+        config/nginx.conf.template > config/nginx.conf
+fi
 
 echo "  Generated config/nginx.conf"
 
 # Start nginx via Compose override
 cd docker
-docker compose -f docker-compose.node.yml -f docker-compose.lb.yml up -d nginx
+docker compose -f docker-compose.node.yml -f docker-compose.lb.yml up -d --no-recreate nginx
 cd "$SCRIPT_DIR"
 
 # Wait for nginx health

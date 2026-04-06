@@ -134,12 +134,13 @@ declare -A BACKEND_COUNT
 LB_TEST_OK=true
 
 for i in $(seq 1 10); do
-    BACKEND=$(curl -sI --max-time 60 "${LB_URL}/v1/models" 2>/dev/null \
+    BACKEND=$(curl -sI --max-time 10 "${LB_URL}/v1/models" 2>/dev/null \
         | grep -i 'X-Backend-Server' | awk '{print $2}' | tr -d '\r\n') || true
 
     if [[ -n "$BACKEND" ]]; then
         BACKEND_COUNT[$BACKEND]=$(( ${BACKEND_COUNT[$BACKEND]:-0} + 1 ))
     fi
+    sleep 0.2
 done
 
 if [[ ${#BACKEND_COUNT[@]} -ge 2 ]]; then

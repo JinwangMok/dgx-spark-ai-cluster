@@ -14,16 +14,20 @@ services:
     command: >
       --model ${MODEL_ID:-google/gemma-4-26B-A4B-it}
       --port 8000
-      --gpu-memory-utilization ${VLLM_GPU_MEMORY_UTILIZATION:-0.80}
+      --gpu-memory-utilization ${VLLM_GPU_MEMORY_UTILIZATION:-0.70}
       --dtype auto
+      --enable-auto-tool-choice
       --tool-call-parser gemma4
       --reasoning-parser gemma4
       --load-format safetensors
       --enable-prefix-caching
+      --enable-chunked-prefill
       --max-num-seqs 4
+      --max-num-batched-tokens 8192
+      --max-model-len 262144
       --kv-cache-dtype fp8
     # GPU: Both vLLM and whisper share the unified 128GB LPDDR5X.
-    # vLLM claims 80% (~102GB), whisper uses ~3-4GB from the remaining ~26GB.
+    # vLLM claims 70% (~90GB), whisper uses ~3-4GB from the remaining ~38GB.
     # DGX Spark has a single GPU device — both containers need access to it.
     deploy:
       resources:
@@ -32,13 +36,13 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    shm_size: '1g'
+    ipc: host
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 180s
+      retries: 5
+      start_period: 3600s
     logging:
       driver: json-file
       options:

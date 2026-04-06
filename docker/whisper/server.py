@@ -35,17 +35,23 @@ def get_model():
 
                 model_size = os.environ.get("WHISPER_MODEL", "large-v3")
                 cache_dir = os.environ.get("WHISPER_CACHE_DIR", "/data/models/whisper")
-                device = "cuda"
-                compute_type = "float16"
 
-                logger.info(f"Loading whisper model: {model_size} (device={device}, compute={compute_type})")
-                model = WhisperModel(
-                    model_size,
-                    device=device,
-                    compute_type=compute_type,
-                    download_root=cache_dir,
-                )
-                logger.info("Whisper model loaded successfully")
+                # Try GPU first, fall back to CPU if CTranslate2 lacks CUDA on aarch64
+                for device, compute_type in [("cuda", "float16"), ("cpu", "int8")]:
+                    try:
+                        logger.info(f"Loading whisper model: {model_size} (device={device}, compute={compute_type})")
+                        model = WhisperModel(
+                            model_size,
+                            device=device,
+                            compute_type=compute_type,
+                            download_root=cache_dir,
+                        )
+                        logger.info(f"Whisper model loaded successfully on {device}")
+                        break
+                    except Exception as e:
+                        logger.warning(f"Failed to load on {device}: {e}")
+                        if device == "cpu":
+                            raise
     return model
 
 

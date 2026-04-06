@@ -81,7 +81,10 @@ fi
 
 # Check disk space
 DATA_DIR="${MODEL_CACHE_DIR:-/data/models}"
-mkdir -p "$DATA_DIR"
+if [[ ! -d "$DATA_DIR" ]]; then
+    mkdir -p "$DATA_DIR" 2>/dev/null || sudo mkdir -p "$DATA_DIR"
+    sudo chown -R "$(id -u):$(id -g)" "$DATA_DIR" 2>/dev/null || true
+fi
 AVAILABLE_GB=$(df -BG "$DATA_DIR" | tail -1 | awk '{print $4}' | tr -d 'G')
 if [[ "$AVAILABLE_GB" -lt 80 ]]; then
     echo "ERROR: Insufficient disk space on $DATA_DIR"
@@ -105,7 +108,7 @@ echo "[2/6] GPU memory probe..."
 GPU_MEM_BYTES=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -1)
 echo "  GPU reports: ${GPU_MEM_BYTES} MiB"
 echo "  vLLM gpu_memory_utilization: ${VLLM_GPU_MEMORY_UTILIZATION}"
-USABLE_MB=$(echo "$GPU_MEM_BYTES * $VLLM_GPU_MEMORY_UTILIZATION" | bc 2>/dev/null || echo "N/A")
+USABLE_MB=$(awk "BEGIN {printf \"%.0f\", $GPU_MEM_BYTES * $VLLM_GPU_MEMORY_UTILIZATION}" 2>/dev/null || echo "N/A")
 echo "  vLLM will use: ~${USABLE_MB} MiB"
 
 # ─── Download Models ───
@@ -132,7 +135,10 @@ fi
 
 # Download Whisper model
 WHISPER_CACHE="${WHISPER_CACHE_DIR:-/data/models/whisper}"
-mkdir -p "$WHISPER_CACHE"
+if [[ ! -d "$WHISPER_CACHE" ]]; then
+    mkdir -p "$WHISPER_CACHE" 2>/dev/null || sudo mkdir -p "$WHISPER_CACHE"
+    sudo chown -R "$(id -u):$(id -g)" "$WHISPER_CACHE" 2>/dev/null || true
+fi
 echo "  Downloading Whisper: $WHISPER_MODEL"
 echo "  Whisper model will be downloaded on first container start if not cached"
 
@@ -171,7 +177,7 @@ fi
 echo ""
 echo "[6/6] Waiting for services to become healthy..."
 
-MAX_WAIT=300  # 5 minutes max
+MAX_WAIT=3600  # 60 minutes max (first run: 49GB download + model load)
 INTERVAL=10
 ELAPSED=0
 
@@ -195,7 +201,7 @@ while [[ $ELAPSED -lt $MAX_WAIT ]]; do
 
     echo "  Waiting... (${ELAPSED}s / ${MAX_WAIT}s)"
     sleep $INTERVAL
-    ((ELAPSED += INTERVAL))
+    ELAPSED=$((ELAPSED + INTERVAL))
 done
 
 if [[ $ELAPSED -ge $MAX_WAIT ]]; then

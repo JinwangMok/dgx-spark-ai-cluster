@@ -23,10 +23,10 @@ check() {
 
     if curl -sf --max-time "$timeout" "$url" > /dev/null 2>&1; then
         [[ -z "$QUIET" ]] && echo "  [PASS] $name"
-        ((PASS++))
+        PASS=$((PASS + 1))
     else
         [[ -z "$QUIET" ]] && echo "  [FAIL] $name ($url)"
-        ((FAIL++))
+        FAIL=$((FAIL + 1))
     fi
 }
 

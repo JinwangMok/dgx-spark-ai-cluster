@@ -19,8 +19,8 @@ http {
     access_log /var/log/nginx/access.log upstream_log;
 
     # Rate limiting zones
-    limit_req_zone $binary_remote_addr zone=llm:10m rate=30r/m;
-    limit_req_zone $binary_remote_addr zone=stt:10m rate=10r/m;
+    limit_req_zone $binary_remote_addr zone=llm:10m rate=10r/s;
+    limit_req_zone $binary_remote_addr zone=stt:10m rate=5r/s;
 
     # --- LLM Backend (vLLM OpenAI-compatible API) ---
     upstream llm_backend {
@@ -50,7 +50,8 @@ http {
 
         # --- LLM API (OpenAI-compatible) ---
         location /v1/ {
-            limit_req zone=llm burst=10 nodelay;
+            client_max_body_size 1m;
+            limit_req zone=llm burst=20 nodelay;
 
             proxy_pass http://llm_backend/v1/;
             proxy_http_version 1.1;
@@ -71,12 +72,14 @@ http {
             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 
             # Backend identification for verification
+            # NOTE: Remove this header if exposed to untrusted networks
             add_header X-Backend-Server $upstream_addr always;
         }
 
         # --- STT API (OpenAI Whisper-compatible) ---
         location /stt/ {
-            limit_req zone=stt burst=5 nodelay;
+            client_max_body_size 25m;
+            limit_req zone=stt burst=10 nodelay;
 
             # Strip /stt prefix before proxying
             rewrite ^/stt/(.*) /$1 break;
@@ -90,6 +93,7 @@ http {
             proxy_set_header X-Real-IP $remote_addr;
             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 
+            # NOTE: Remove this header if exposed to untrusted networks
             add_header X-Backend-Server $upstream_addr always;
         }
 
