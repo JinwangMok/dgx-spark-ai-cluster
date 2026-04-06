@@ -1,0 +1,25 @@
+services:
+  nginx:
+    image: nginx:stable
+    container_name: gemma4-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ../config/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      vllm:
+        condition: service_healthy
+      whisper:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:80/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"

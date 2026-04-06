@@ -1,0 +1,110 @@
+worker_processes auto;
+error_log /var/log/nginx/error.log warn;
+pid /var/run/nginx.pid;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    # Hide nginx version
+    server_tokens off;
+
+    # Custom log format with upstream address for LB verification
+    log_format upstream_log '$remote_addr - $remote_user [$time_local] '
+                            '"$request" $status $body_bytes_sent '
+                            '"$http_referer" "$http_user_agent" '
+                            'upstream=$upstream_addr response_time=$upstream_response_time';
+
+    access_log /var/log/nginx/access.log upstream_log;
+
+    # Rate limiting zones
+    limit_req_zone $binary_remote_addr zone=llm:10m rate=30r/m;
+    limit_req_zone $binary_remote_addr zone=stt:10m rate=10r/m;
+
+    # --- LLM Backend (vLLM OpenAI-compatible API) ---
+    upstream llm_backend {
+        least_conn;
+        server ${NODE_A_IP}:8000 max_fails=2 fail_timeout=30s;
+        server ${NODE_B_IP}:8000 max_fails=2 fail_timeout=30s;
+    }
+
+    # --- STT Backend (faster-whisper) ---
+    upstream stt_backend {
+        least_conn;
+        server ${NODE_A_IP}:9000 max_fails=2 fail_timeout=30s;
+        server ${NODE_B_IP}:9000 max_fails=2 fail_timeout=30s;
+    }
+
+    server {
+        listen 80;
+        server_name _;
+
+        # Security headers
+        add_header X-Frame-Options "DENY" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-XSS-Protection "1; mode=block" always;
+
+        # Increase body size for audio file uploads (STT)
+        client_max_body_size 25m;
+
+        # --- LLM API (OpenAI-compatible) ---
+        location /v1/ {
+            limit_req zone=llm burst=10 nodelay;
+
+            proxy_pass http://llm_backend/v1/;
+            proxy_http_version 1.1;
+
+            # SSE streaming support
+            proxy_buffering off;
+            proxy_cache off;
+            proxy_set_header Connection '';
+            chunked_transfer_encoding on;
+
+            # Long timeout for LLM generation
+            proxy_read_timeout 300s;
+            proxy_send_timeout 300s;
+
+            # Standard proxy headers
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+            # Backend identification for verification
+            add_header X-Backend-Server $upstream_addr always;
+        }
+
+        # --- STT API (OpenAI Whisper-compatible) ---
+        location /stt/ {
+            limit_req zone=stt burst=5 nodelay;
+
+            # Strip /stt prefix before proxying
+            rewrite ^/stt/(.*) /$1 break;
+            proxy_pass http://stt_backend;
+            proxy_http_version 1.1;
+
+            proxy_read_timeout 120s;
+            proxy_send_timeout 120s;
+
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+            add_header X-Backend-Server $upstream_addr always;
+        }
+
+        # --- Health Check (proxied to actual backend) ---
+        location /health {
+            access_log off;
+            proxy_pass http://llm_backend/health;
+            proxy_read_timeout 5s;
+        }
+
+        # --- Status Page ---
+        location /status {
+            access_log off;
+            return 200 '{"service":"dgx-spark-gemma4-cluster","llm":"gemma-4-26B-A4B-it","stt":"faster-whisper-large-v3","nodes":2}';
+            add_header Content-Type application/json;
+        }
+    }
+}

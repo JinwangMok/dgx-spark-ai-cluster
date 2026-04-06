@@ -1,0 +1,78 @@
+services:
+  vllm:
+    image: ${VLLM_IMAGE:-vllm/vllm-openai:gemma4-cu130}
+    container_name: gemma4-vllm
+    restart: unless-stopped
+    ports:
+      - "${VLLM_PORT:-8000}:8000"
+    volumes:
+      - ${MODEL_CACHE_DIR:-/data/models}:/data/models
+    environment:
+      - HF_HOME=/data/models
+    env_file:
+      - ../.env.token
+    command: >
+      --model ${MODEL_ID:-google/gemma-4-26B-A4B-it}
+      --port 8000
+      --gpu-memory-utilization ${VLLM_GPU_MEMORY_UTILIZATION:-0.80}
+      --dtype auto
+      --tool-call-parser gemma4
+      --reasoning-parser gemma4
+      --load-format safetensors
+      --enable-prefix-caching
+      --max-num-seqs 4
+      --kv-cache-dtype fp8
+    # GPU: Both vLLM and whisper share the unified 128GB LPDDR5X.
+    # vLLM claims 80% (~102GB), whisper uses ~3-4GB from the remaining ~26GB.
+    # DGX Spark has a single GPU device — both containers need access to it.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    shm_size: '1g'
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "3"
+
+  whisper:
+    build:
+      context: ./whisper
+      dockerfile: Dockerfile
+    container_name: gemma4-whisper
+    restart: unless-stopped
+    ports:
+      - "${WHISPER_PORT:-9000}:9000"
+    volumes:
+      - ${WHISPER_CACHE_DIR:-/data/models/whisper}:/data/models/whisper
+    environment:
+      - WHISPER_MODEL=${WHISPER_MODEL:-large-v3}
+      - WHISPER_PORT=9000
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "3"

@@ -1,0 +1,27 @@
+# Secrets
+.env
+.env.token
+
+# Generated config (contains node IPs)
+config/nginx.conf
+
+# Temporary files
+/tmp/
+__pycache__/
+*.pyc
+
+# Test artifacts
+tests/test.wav
+
+# IDE
+.vscode/
+.idea/
+
+# OMC state
+.omc/
+
+# Docker build cache
+docker/whisper/__pycache__/
+
+# OS
+.DS_Store
