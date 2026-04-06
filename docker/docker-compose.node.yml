@@ -60,7 +60,7 @@ services:
     volumes:
       - ${WHISPER_CACHE_DIR:-/data/models/whisper}:/data/models/whisper
     environment:
-      - WHISPER_MODEL=${WHISPER_MODEL:-large-v3}
+      - WHISPER_MODEL=${WHISPER_MODEL:-large-v3-turbo}
       - WHISPER_PORT=9000
     deploy:
       resources:
