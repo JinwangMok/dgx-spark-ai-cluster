@@ -161,13 +161,11 @@ echo "  Whisper image: built"
 echo ""
 echo "[5/6] Starting containers..."
 
-# Stop existing containers (idempotent)
+# Start containers (--no-recreate preserves already-running healthy containers)
 if [[ "$ROLE" == "nodeA" ]] && [[ "$SKIP_LB" == "false" ]]; then
-    docker compose -f docker-compose.node.yml -f docker-compose.lb.yml down --remove-orphans 2>/dev/null || true
-    docker compose -f docker-compose.node.yml -f docker-compose.lb.yml up -d
+    docker compose -f docker-compose.node.yml -f docker-compose.lb.yml up -d --no-recreate
 else
-    docker compose -f docker-compose.node.yml down --remove-orphans 2>/dev/null || true
-    docker compose -f docker-compose.node.yml up -d
+    docker compose -f docker-compose.node.yml up -d --no-recreate
 fi
 
 # ─── Wait for Health Checks ───
