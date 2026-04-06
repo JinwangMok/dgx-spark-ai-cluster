@@ -50,7 +50,6 @@ set +a
 MISSING=()
 [[ -z "${NODE_A_IP:-}" ]] && MISSING+=("NODE_A_IP")
 [[ -z "${NODE_B_IP:-}" ]] && MISSING+=("NODE_B_IP")
-[[ -z "${HF_TOKEN:-}" ]] && MISSING+=("HF_TOKEN")
 
 if [[ ${#MISSING[@]} -gt 0 ]]; then
     echo "ERROR: Required variables not set in .env:"
@@ -106,8 +105,8 @@ rsync -az --delete \
 scp "$SCRIPT_DIR/.env" "${SSH_TARGET}:${REMOTE_DIR}/.env"
 ssh "$SSH_TARGET" "chmod 600 ${REMOTE_DIR}/.env"
 
-# Create token-only file for Docker env_file (avoids exposing full .env)
-printf 'HUGGING_FACE_HUB_TOKEN=%s\n' "$HF_TOKEN" > "$SCRIPT_DIR/.env.token"
+# Create token file for Docker env_file (may be empty if HF_TOKEN not set)
+printf 'HUGGING_FACE_HUB_TOKEN=%s\n' "${HF_TOKEN:-}" > "$SCRIPT_DIR/.env.token"
 chmod 600 "$SCRIPT_DIR/.env.token"
 scp "$SCRIPT_DIR/.env.token" "${SSH_TARGET}:${REMOTE_DIR}/.env.token"
 ssh "$SSH_TARGET" "chmod 600 ${REMOTE_DIR}/.env.token"
@@ -118,7 +117,7 @@ echo ""
 # ─── Step 3: Parallel Node Setup ───
 
 # Ensure local .env.token exists for Docker env_file
-printf 'HUGGING_FACE_HUB_TOKEN=%s\n' "$HF_TOKEN" > "$SCRIPT_DIR/.env.token"
+printf 'HUGGING_FACE_HUB_TOKEN=%s\n' "${HF_TOKEN:-}" > "$SCRIPT_DIR/.env.token"
 chmod 600 "$SCRIPT_DIR/.env.token"
 
 echo "[Step 3/5] Setting up services on both nodes (parallel)..."

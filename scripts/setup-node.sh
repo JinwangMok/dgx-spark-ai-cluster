@@ -93,13 +93,12 @@ if [[ "$AVAILABLE_GB" -lt 80 ]]; then
 fi
 echo "  Disk ($DATA_DIR): ${AVAILABLE_GB}GB available"
 
-# Check HuggingFace token
-if [[ -z "${HF_TOKEN:-}" ]]; then
-    echo "ERROR: HF_TOKEN is not set"
-    echo "  Set it in .env or export HF_TOKEN=hf_..."
-    exit 1
+# Check HuggingFace token (optional — Gemma 4 is Apache 2.0)
+if [[ -n "${HF_TOKEN:-}" ]]; then
+    echo "  HF Token: set"
+else
+    echo "  HF Token: not set (OK for public models like Gemma 4)"
 fi
-echo "  HF Token: set"
 
 # ─── GPU Memory Probe ───
 
@@ -122,10 +121,9 @@ if [[ -d "$DATA_DIR/models--$(echo "$MODEL_ID" | tr '/' '--')" ]]; then
     echo "  LLM model already cached, skipping download"
 else
     if command -v huggingface-cli &> /dev/null; then
-        huggingface-cli download "$MODEL_ID" \
-            --token "$HF_TOKEN" \
-            --cache-dir "$DATA_DIR" \
-            --local-dir-use-symlinks True \
+        HF_CLI_ARGS="--cache-dir $DATA_DIR --local-dir-use-symlinks True"
+        [[ -n "${HF_TOKEN:-}" ]] && HF_CLI_ARGS="--token $HF_TOKEN $HF_CLI_ARGS"
+        huggingface-cli download "$MODEL_ID" $HF_CLI_ARGS \
             || { echo "ERROR: Failed to download LLM model"; exit 1; }
     else
         echo "  huggingface-cli not found, model will be downloaded by vLLM on first start"
