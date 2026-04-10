@@ -2,8 +2,9 @@
 .env
 .env.token
 
-# Generated config (contains node IPs)
+# Generated config (contains node IPs or is used directly)
 config/nginx.conf
+config/nginx-single.conf
 
 # Temporary files
 /tmp/

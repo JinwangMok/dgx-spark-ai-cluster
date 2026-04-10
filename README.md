@@ -246,26 +246,173 @@ envsubst '${NODE_A_IP} ${NODE_B_IP}' < config/nginx.conf.template > config/nginx
 cd docker && docker compose -f docker-compose.node.yml -f docker-compose.lb.yml up -d nginx
 ```
 
+---
+
+## Single-Node Setup (Gemma-4-31B-IT-NVFP4)
+
+단일 DGX Spark 1대에서 **Gemma-4-31B-IT-NVFP4** (NVFP4 양자화, 멀티모달) + **faster-whisper** STT를 서빙하는 독립 스크립트.
+
+```
+┌───────────────────────────────┐
+│     nginx (:80)               │
+│   /v1/* → vLLM   /stt/* → STT│
+├───────────────────────────────┤
+│   Single DGX Spark            │
+│   vLLM :8000 (31B NVFP4)     │
+│   Whisper :9000               │
+└───────────────────────────────┘
+```
+
+### Differences from 2-Node Cluster
+
+| | 2-Node Cluster | Single Node |
+|---|---|---|
+| Model | Gemma 4 26B-A4B MoE | Gemma-4-31B-IT-NVFP4 |
+| Quantization | FP8 (online) | NVFP4 (pre-quantized, modelopt) |
+| Nodes | 2x DGX Spark | 1x DGX Spark |
+| GPU Memory | 70% for vLLM | 85% for vLLM |
+| nginx | Load balancer (2 upstreams) | Reverse proxy (1 upstream) |
+| Setup script | `setup.sh` (SSH + rsync) | `setup-single.sh` (local only) |
+| Multimodal | Text only | Text + Image + Video |
+
+### Quick Start (Single Node)
+
+```bash
+# 1. Clone on the DGX Spark
+git clone https://github.com/<your-org>/dgx-spark-ai-cluster.git
+cd dgx-spark-ai-cluster
+
+# 2. (Optional) Configure .env for HF_TOKEN or cache dir overrides
+cp .env.example .env
+nano .env   # HF_TOKEN is optional for this model
+
+# 3. Run setup
+chmod +x setup-single.sh
+./setup-single.sh
+```
+
+First run takes **10-30 minutes** (model download: ~16-20GB + whisper model).
+
+### Model Details
+
+- **Model**: [`nvidia/Gemma-4-31B-IT-NVFP4`](https://huggingface.co/nvidia/Gemma-4-31B-IT-NVFP4) — 30.7B parameters, NVFP4 quantized
+- **Context**: 256K tokens (`--max-model-len 262144`)
+- **Multimodal**: Text + Image (variable resolution) + Video (up to 60s, 1fps)
+- **Tool Calling**: Enabled (`--enable-auto-tool-choice --tool-call-parser gemma4`)
+- **Quantization**: `--quantization modelopt` (NVIDIA Model Optimizer)
+- **License**: NVIDIA Open Model License + Apache 2.0
+
+### API Endpoints (Single Node)
+
+Same URL structure as the cluster, accessed via nginx on port 80:
+
+```bash
+# Text chat
+curl http://<DGX_IP>/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "nvidia/Gemma-4-31B-IT-NVFP4",
+    "messages": [{"role": "user", "content": "Hello!"}],
+    "max_tokens": 256
+  }'
+
+# Multimodal (image)
+curl http://<DGX_IP>/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "nvidia/Gemma-4-31B-IT-NVFP4",
+    "messages": [{"role": "user", "content": [
+      {"type": "text", "text": "Describe this image."},
+      {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}}
+    ]}],
+    "max_tokens": 256
+  }'
+
+# Tool calling
+curl http://<DGX_IP>/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "nvidia/Gemma-4-31B-IT-NVFP4",
+    "messages": [{"role": "user", "content": "What is the weather in Seoul?"}],
+    "tools": [{"type": "function", "function": {"name": "get_weather", "description": "Get weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}}]
+  }'
+
+# STT transcription
+curl http://<DGX_IP>/stt/v1/audio/transcriptions \
+  -F file=@audio.wav -F model=whisper-1
+
+# Health & status
+curl http://<DGX_IP>/health
+curl http://<DGX_IP>/status
+```
+
+### Remote Verification
+
+검증 스크립트를 원격 머신 (Windows/Linux/macOS)에서 실행:
+
+```bash
+# Linux / macOS
+./verify-remote.sh <DGX_SPARK_IP>
+
+# Windows (cmd)
+verify-remote.bat <DGX_SPARK_IP>
+```
+
+Tests: health check, text chat, multimodal (image), tool calling, STT transcription, response time.
+
+### Single-Node Management
+
+```bash
+# View logs
+cd docker && docker compose -f docker-compose.single.yml logs -f
+docker compose -f docker-compose.single.yml logs vllm
+
+# Stop all services
+cd docker && docker compose -f docker-compose.single.yml down
+
+# Restart (idempotent)
+./setup-single.sh
+```
+
+> **Note**: The single-node setup and 2-node cluster cannot run simultaneously on the same machine (port conflict on 8000, 9000, 80).
+
+### Single-Node Memory Budget (128GB unified)
+
+| Component | Memory | Notes |
+|-----------|--------|-------|
+| Gemma-4-31B-IT-NVFP4 (NVFP4) | ~16-20GB | Pre-quantized weights |
+| vLLM KV cache + overhead | ~89GB | At `gpu_memory_utilization=0.85` |
+| faster-whisper (large-v3-turbo) | ~3-4GB | CTranslate2 GPU |
+| nginx + OS | ~5-10GB | |
+| **Headroom** | **~5-14GB** | Safety margin |
+
+---
+
 ## Project Structure
 
 ```
 dgx-spark-ai-cluster/
 ├── .env.example                    # Environment template (copy to .env)
-├── setup.sh                        # Main entry point — deploys everything
-├── verify.sh                       # Validation script
+├── setup.sh                        # 2-node cluster deploy
+├── setup-single.sh                 # Single-node deploy (Gemma-4-31B-IT-NVFP4)
+├── verify.sh                       # 2-node cluster validation
+├── verify-remote.sh                # Remote verification (Linux/macOS)
+├── verify-remote.bat               # Remote verification (Windows)
 ├── README.md
 ├── config/
-│   ├── nginx.conf.template         # nginx LB config (envsubst template)
-│   ├── vllm-env.sh                 # vLLM configuration
+│   ├── nginx.conf.template         # nginx LB config (2-node, envsubst template)
+│   ├── nginx-single.conf           # nginx config (single-node, static)
+│   ├── vllm-env.sh                 # vLLM configuration (2-node)
 │   └── whisper-env.sh              # Whisper configuration
 ├── docker/
-│   ├── docker-compose.node.yml     # Base: vLLM + whisper (both nodes)
-│   ├── docker-compose.lb.yml       # Override: adds nginx (Node A only)
+│   ├── docker-compose.node.yml     # 2-node: vLLM + whisper (both nodes)
+│   ├── docker-compose.lb.yml       # 2-node: adds nginx (Node A only)
+│   ├── docker-compose.single.yml   # Single-node: vLLM + whisper + nginx
 │   └── whisper/
 │       ├── Dockerfile              # Custom faster-whisper for aarch64
 │       └── server.py               # Whisper API server
 ├── scripts/
-│   ├── setup-node.sh               # Per-node setup (prereqs, download, start)
+│   ├── setup-node.sh               # Per-node setup (2-node cluster)
 │   └── health-check.sh             # Health check utility
 └── tests/
     └── generate-test-audio.sh      # Generate test WAV for STT verification
