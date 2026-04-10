@@ -80,7 +80,9 @@ REM ━━━ 3. Multimodal (Image Input) ━━━
 echo.
 echo --- 3. Multimodal (Image Input) ---
 
-set "MM_PAYLOAD={\"model\":\"%MODEL%\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Describe this image in one sentence.\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"https://upload.wikimedia.org/wikipedia/commons/thumb/4/47/PNG_transparency_demonstration_1.png/280px-PNG_transparency_demonstration_1.png\"}}]}],\"max_tokens\":50,\"temperature\":0.1}"
+REM Generate a tiny 2x2 red PNG as base64 (avoids external URL 403 issues)
+for /f "delims=" %%B in ('python -c "import base64,zlib;from struct import pack;w,h=2,2;raw=b''.join(b'\x00'+b'\xff\x00\x00'*w for _ in range(h));chunk=lambda t,d:pack('>I',len(d))+t+d+pack('>I',zlib.crc32(t+d)%%0xffffffff);png=b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',pack('>IIBBBBB',w,h,8,2,0,0,0))+chunk(b'IDAT',zlib.compress(raw))+chunk(b'IEND',b'');print(base64.b64encode(png).decode())" 2^>nul') do set "IMG_B64=%%B"
+set "MM_PAYLOAD={\"model\":\"%MODEL%\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"What color is this image? Answer in one word.\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,!IMG_B64!\"}}]}],\"max_tokens\":20,\"temperature\":0.1}"
 
 curl.exe -sf --max-time 120 "%BASE_URL%/v1/chat/completions" -H "Content-Type: application/json" -d "%MM_PAYLOAD%" > "%TEMP%\dgx_mm_response.json" 2>nul
 

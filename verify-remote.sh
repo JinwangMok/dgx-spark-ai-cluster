@@ -85,21 +85,41 @@ fi
 
 section "3. Multimodal (Image Input)"
 
-# Use a small, publicly accessible test image
-MULTIMODAL_RESPONSE=$(curl -sf --max-time 120 "${BASE_URL}/v1/chat/completions" \
-    -H "Content-Type: application/json" \
-    -d "{
-        \"model\": \"${MODEL}\",
-        \"messages\": [{
-            \"role\": \"user\",
-            \"content\": [
-                {\"type\": \"text\", \"text\": \"Describe this image in one sentence.\"},
-                {\"type\": \"image_url\", \"image_url\": {\"url\": \"https://upload.wikimedia.org/wikipedia/commons/thumb/4/47/PNG_transparency_demonstration_1.png/280px-PNG_transparency_demonstration_1.png\"}}
-            ]
-        }],
-        \"max_tokens\": 50,
-        \"temperature\": 0.1
-    }" 2>/dev/null) || true
+# Generate a tiny 2x2 red PNG as base64 (avoids external URL issues like 403)
+TEST_IMG_B64=$(python3 -c "
+import base64, zlib
+from struct import pack
+w, h = 2, 2
+raw = b''.join(b'\x00' + b'\xff\x00\x00' * w for _ in range(h))
+def chunk(t, d):
+    c = t + d
+    return pack('>I', len(d)) + c + pack('>I', zlib.crc32(c) & 0xffffffff)
+png = b'\x89PNG\r\n\x1a\n'
+png += chunk(b'IHDR', pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0))
+png += chunk(b'IDAT', zlib.compress(raw))
+png += chunk(b'IEND', b'')
+print(base64.b64encode(png).decode())
+" 2>/dev/null) || true
+
+if [[ -n "$TEST_IMG_B64" ]]; then
+    MULTIMODAL_RESPONSE=$(curl -sf --max-time 120 "${BASE_URL}/v1/chat/completions" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"model\": \"${MODEL}\",
+            \"messages\": [{
+                \"role\": \"user\",
+                \"content\": [
+                    {\"type\": \"text\", \"text\": \"What color is this image? Answer in one word.\"},
+                    {\"type\": \"image_url\", \"image_url\": {\"url\": \"data:image/png;base64,${TEST_IMG_B64}\"}}
+                ]
+            }],
+            \"max_tokens\": 20,
+            \"temperature\": 0.1
+        }" 2>/dev/null) || true
+else
+    warn "python3 not available for base64 image generation"
+    MULTIMODAL_RESPONSE=""
+fi
 
 if echo "$MULTIMODAL_RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['choices'][0]['message']['content']" 2>/dev/null; then
     MM_TEXT=$(echo "$MULTIMODAL_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['choices'][0]['message']['content'][:100])")
