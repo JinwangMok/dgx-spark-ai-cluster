@@ -58,7 +58,7 @@ services:
     build:
       context: ./whisper
       dockerfile: Dockerfile
-    container_name: gemma4-31b-whisper
+    container_name: dgx-whisper
     restart: unless-stopped
     ports:
       - "9000:9000"
@@ -88,7 +88,7 @@ services:
 
   nginx:
     image: nginx:stable
-    container_name: gemma4-31b-nginx
+    container_name: dgx-nginx
     restart: unless-stopped
     ports:
       - "80:80"
