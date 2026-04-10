@@ -38,14 +38,12 @@ Override extra args via `VLLM_EXTRA_ARGS` env var in `config/vllm-env.sh`.
 
 ## Single-Node vLLM Configuration
 
-Single-node mode serves `nvidia/Gemma-4-31B-IT-NVFP4` (defined in `docker-compose.single.yml`):
-- **NVFP4 quantization** (`--quantization modelopt`) — pre-quantized via NVIDIA Model Optimizer
-- **Multimodal** — text + image + video input natively supported
-- **Tool calling** enabled (same `gemma4` parser)
-- **256K context** (`--max-model-len 262144`)
-- **85% GPU memory** (`--gpu-memory-utilization 0.85`) — NVFP4 weights are ~16-20GB, more room for KV cache
+Single-node mode (`setup-single.sh`) defaults to the same model as the 2-node cluster:
+- **Default**: `google/gemma-4-26B-A4B-it` (FP8, ~38 t/s) — identical to 2-node cluster config
+- **`--31b` flag**: `nvidia/Gemma-4-31B-IT-NVFP4` (NVFP4/modelopt, multimodal, ~7 t/s)
 - **nginx**: Uses Docker service names (`vllm:8000`, `whisper:9000`) instead of host IPs
-- Container names use `gemma4-31b-*` prefix to avoid collision with 2-node `gemma4-*` containers
+- Container names use `dgx-*` prefix (or `gemma4-31b-*` for 31B mode)
+- Model-specific settings (quantization, GPU memory) are set via env vars in `docker-compose.single.yml`
 
 ## Key Commands
 

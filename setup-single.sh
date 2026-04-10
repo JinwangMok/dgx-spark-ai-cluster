@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# Single DGX Spark Setup — Gemma-4-31B-IT-NVFP4 + faster-whisper + nginx
+# Single DGX Spark Setup — LLM + faster-whisper + nginx
 #
-# Usage: ./setup-single.sh
+# Usage: ./setup-single.sh [--31b]
+#
+# Default: Gemma 4 26B-A4B MoE (FP8, same as 2-node cluster)
+#   --31b: Gemma-4-31B-IT-NVFP4 (NVFP4/modelopt, multimodal, slower ~7 t/s)
 #
 # Deploys on a single DGX Spark node:
-#   - vLLM serving nvidia/Gemma-4-31B-IT-NVFP4 (NVFP4, multimodal, 256K context)
+#   - vLLM serving the selected model
 #   - faster-whisper STT (large-v3-turbo)
 #   - nginx reverse proxy (port 80)
 #
@@ -18,7 +21,39 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# Source whisper config (vLLM config is in docker-compose.single.yml)
+# ─── Parse arguments ───
+
+USE_31B=false
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --31b) USE_31B=true; shift ;;
+        *) echo "Unknown argument: $1"; echo "Usage: $0 [--31b]"; exit 1 ;;
+    esac
+done
+
+# ─── Model configuration ───
+
+if $USE_31B; then
+    # Gemma-4-31B-IT-NVFP4 (NVFP4 pre-quantized, multimodal, ~7 t/s)
+    export MODEL_ID="nvidia/Gemma-4-31B-IT-NVFP4"
+    export VLLM_QUANTIZATION="modelopt"
+    export VLLM_QUANT_EXTRA_ARGS=" "
+    export VLLM_GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-0.85}"
+    export VLLM_CONTAINER_NAME="gemma4-31b-vllm"
+    MODEL_LABEL="Gemma-4-31B-IT-NVFP4 (NVFP4, multimodal)"
+    MIN_DISK_GB=50
+else
+    # Gemma 4 26B-A4B MoE (FP8, same as 2-node cluster, ~38 t/s)
+    export MODEL_ID="google/gemma-4-26B-A4B-it"
+    export VLLM_QUANTIZATION="fp8"
+    export VLLM_QUANT_EXTRA_ARGS="--kv-cache-dtype fp8 --load-format safetensors"
+    export VLLM_GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-0.70}"
+    export VLLM_CONTAINER_NAME="dgx-vllm"
+    MODEL_LABEL="Gemma 4 26B-A4B MoE (FP8)"
+    MIN_DISK_GB=80
+fi
+
+# Source whisper config
 source "$SCRIPT_DIR/config/whisper-env.sh"
 
 # Source .env if it exists (for optional overrides like HF_TOKEN, MODEL_CACHE_DIR)
@@ -34,7 +69,7 @@ WHISPER_CACHE_DIR="${WHISPER_CACHE_DIR:-/data/models/whisper}"
 
 echo "=========================================="
 echo "DGX Spark — Single Node Setup"
-echo "Model: nvidia/Gemma-4-31B-IT-NVFP4"
+echo "Model: ${MODEL_LABEL}"
 echo "=========================================="
 
 # ─── 1. Pre-flight Checks ───
@@ -71,15 +106,15 @@ if ! docker info 2>/dev/null | grep -q "nvidia"; then
     echo "WARNING: NVIDIA runtime not detected in Docker. GPU passthrough may not work."
 fi
 
-# Check disk space (NVFP4 model ~16-20GB + whisper + images)
+# Check disk space
 if [[ ! -d "$MODEL_CACHE_DIR" ]]; then
     mkdir -p "$MODEL_CACHE_DIR" 2>/dev/null || sudo mkdir -p "$MODEL_CACHE_DIR"
     sudo chown -R "$(id -u):$(id -g)" "$MODEL_CACHE_DIR" 2>/dev/null || true
 fi
 AVAILABLE_GB=$(df -BG "$MODEL_CACHE_DIR" | tail -1 | awk '{print $4}' | tr -d 'G')
-if [[ "$AVAILABLE_GB" -lt 50 ]]; then
+if [[ "$AVAILABLE_GB" -lt "$MIN_DISK_GB" ]]; then
     echo "ERROR: Insufficient disk space on $MODEL_CACHE_DIR"
-    echo "  Available: ${AVAILABLE_GB}GB, Required: 50GB minimum"
+    echo "  Available: ${AVAILABLE_GB}GB, Required: ${MIN_DISK_GB}GB minimum"
     exit 1
 fi
 echo "  Disk ($MODEL_CACHE_DIR): ${AVAILABLE_GB}GB available"
@@ -96,10 +131,9 @@ fi
 echo ""
 echo "[2/7] GPU memory probe..."
 GPU_MEM_MIB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -1)
-VLLM_GPU_UTIL="${VLLM_GPU_MEMORY_UTILIZATION:-0.85}"
 echo "  GPU reports: ${GPU_MEM_MIB} MiB"
-echo "  vLLM gpu_memory_utilization: ${VLLM_GPU_UTIL}"
-USABLE_MB=$(awk "BEGIN {printf \"%.0f\", $GPU_MEM_MIB * $VLLM_GPU_UTIL}" 2>/dev/null || echo "N/A")
+echo "  vLLM gpu_memory_utilization: ${VLLM_GPU_MEMORY_UTILIZATION}"
+USABLE_MB=$(awk "BEGIN {printf \"%.0f\", $GPU_MEM_MIB * $VLLM_GPU_MEMORY_UTILIZATION}" 2>/dev/null || echo "N/A")
 echo "  vLLM will use: ~${USABLE_MB} MiB"
 
 # ─── 3. Create Model Cache Directories ───
@@ -122,22 +156,23 @@ echo "HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}" > "$SCRIPT_DIR/.env.token"
 chmod 600 "$SCRIPT_DIR/.env.token"
 echo "  .env.token: generated"
 
-# ─── 5. Pull vLLM Image & Check modelopt ───
+# ─── 5. Pull vLLM Image & Check quantization support ───
 
 echo ""
 echo "[5/7] Pulling Docker images..."
 docker pull "$VLLM_IMAGE" || { echo "ERROR: Failed to pull vLLM image: $VLLM_IMAGE"; exit 1; }
 echo "  vLLM image: $VLLM_IMAGE pulled"
 
-# Verify modelopt quantization backend is available
-echo "  Checking modelopt quantization support..."
-if docker run --rm "$VLLM_IMAGE" python -c "import modelopt" 2>/dev/null; then
-    echo "  modelopt: available"
-else
-    echo "WARNING: modelopt library not found in $VLLM_IMAGE"
-    echo "  The --quantization modelopt flag may not work."
-    echo "  If vLLM fails to start, you may need a newer vLLM image with modelopt support."
-    echo "  Continuing anyway (vLLM may handle NVFP4 natively)..."
+# Verify quantization backend (only for modelopt/31B)
+if $USE_31B; then
+    echo "  Checking modelopt quantization support..."
+    if docker run --rm "$VLLM_IMAGE" python -c "import modelopt" 2>/dev/null; then
+        echo "  modelopt: available"
+    else
+        echo "WARNING: modelopt library not found in $VLLM_IMAGE"
+        echo "  The --quantization modelopt flag may not work."
+        echo "  Continuing anyway (vLLM may handle NVFP4 natively)..."
+    fi
 fi
 
 # Build whisper image
@@ -151,6 +186,9 @@ echo "  Whisper image: built"
 
 echo ""
 echo "[6/7] Starting containers..."
+echo "  Model: ${MODEL_ID}"
+echo "  Quantization: ${VLLM_QUANTIZATION}"
+echo "  GPU Memory: ${VLLM_GPU_MEMORY_UTILIZATION}"
 cd "$SCRIPT_DIR/docker"
 docker compose -f docker-compose.single.yml up -d --no-recreate
 
@@ -188,7 +226,7 @@ done
 
 if [[ $ELAPSED -ge $MAX_WAIT ]]; then
     echo "WARNING: Health check timeout after ${MAX_WAIT}s"
-    echo "  Services may still be loading (first run downloads ~16-20GB model)"
+    echo "  Services may still be loading"
     echo "  Run 'docker compose -f docker/docker-compose.single.yml logs -f' to check"
     exit 1
 fi
@@ -202,6 +240,8 @@ echo "=========================================="
 echo "  Single Node Setup Complete!"
 echo "=========================================="
 echo ""
+echo "  Model: ${MODEL_LABEL}"
+echo ""
 echo "  Endpoints:"
 echo "    LLM API:   http://${NODE_IP}/v1/chat/completions"
 echo "    STT API:   http://${NODE_IP}/stt/v1/audio/transcriptions"
@@ -212,9 +252,6 @@ echo ""
 echo "  Direct ports (without nginx):"
 echo "    vLLM:      http://${NODE_IP}:8000"
 echo "    Whisper:   http://${NODE_IP}:9000"
-echo ""
-echo "  Model: nvidia/Gemma-4-31B-IT-NVFP4 (NVFP4, multimodal, 256K context)"
-echo "  Quantization: modelopt"
 echo ""
 echo "  Verify from remote machine:"
 echo "    ./verify-remote.sh ${NODE_IP}"

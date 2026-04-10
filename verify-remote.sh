@@ -23,7 +23,11 @@ fi
 
 TARGET_IP="$1"
 BASE_URL="http://${TARGET_IP}"
-MODEL="nvidia/Gemma-4-31B-IT-NVFP4"
+
+# Auto-detect served model from /v1/models endpoint
+MODEL=$(curl -sf --max-time 10 "${BASE_URL}/v1/models" 2>/dev/null \
+    | python3 -c "import sys,json; print(json.load(sys.stdin)['data'][0]['id'])" 2>/dev/null) \
+    || MODEL="unknown"
 
 PASS=0
 FAIL=0

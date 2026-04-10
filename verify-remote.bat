@@ -23,7 +23,10 @@ if "%~1"=="" (
 
 set "TARGET_IP=%~1"
 set "BASE_URL=http://%TARGET_IP%"
-set "MODEL=nvidia/Gemma-4-31B-IT-NVFP4"
+
+REM Auto-detect served model from /v1/models endpoint
+for /f "delims=" %%M in ('curl.exe -sf --max-time 10 "%BASE_URL%/v1/models" 2^>nul ^| python -c "import sys,json;print(json.load(sys.stdin)['data'][0]['id'])" 2^>nul') do set "MODEL=%%M"
+if not defined MODEL set "MODEL=unknown"
 
 set /a PASS=0
 set /a FAIL=0

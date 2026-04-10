@@ -248,9 +248,9 @@ cd docker && docker compose -f docker-compose.node.yml -f docker-compose.lb.yml 
 
 ---
 
-## Single-Node Setup (Gemma-4-31B-IT-NVFP4)
+## Single-Node Setup
 
-단일 DGX Spark 1대에서 **Gemma-4-31B-IT-NVFP4** (NVFP4 양자화, 멀티모달) + **faster-whisper** STT를 서빙하는 독립 스크립트.
+단일 DGX Spark 1대에서 LLM + **faster-whisper** STT를 서빙하는 독립 스크립트.
 
 ```
 ┌───────────────────────────────┐
@@ -263,17 +263,24 @@ cd docker && docker compose -f docker-compose.node.yml -f docker-compose.lb.yml 
 └───────────────────────────────┘
 ```
 
+### Model Options
+
+| | Default (`setup-single.sh`) | 31B mode (`setup-single.sh --31b`) |
+|---|---|---|
+| Model | Gemma 4 26B-A4B MoE | Gemma-4-31B-IT-NVFP4 |
+| Quantization | FP8 (online) | NVFP4 (modelopt) |
+| GPU Memory | 70% for vLLM | 85% for vLLM |
+| TPS | ~38 t/s | ~7 t/s |
+| Multimodal | Text only | Text + Image + Video |
+
 ### Differences from 2-Node Cluster
 
 | | 2-Node Cluster | Single Node |
 |---|---|---|
-| Model | Gemma 4 26B-A4B MoE | Gemma-4-31B-IT-NVFP4 |
-| Quantization | FP8 (online) | NVFP4 (pre-quantized, modelopt) |
 | Nodes | 2x DGX Spark | 1x DGX Spark |
-| GPU Memory | 70% for vLLM | 85% for vLLM |
 | nginx | Load balancer (2 upstreams) | Reverse proxy (1 upstream) |
 | Setup script | `setup.sh` (SSH + rsync) | `setup-single.sh` (local only) |
-| Multimodal | Text only | Text + Image + Video |
+| Default model | Same (Gemma 4 26B-A4B) | Same (Gemma 4 26B-A4B) |
 
 ### Quick Start (Single Node)
 
@@ -284,57 +291,47 @@ cd dgx-spark-ai-cluster
 
 # 2. (Optional) Configure .env for HF_TOKEN or cache dir overrides
 cp .env.example .env
-nano .env   # HF_TOKEN is optional for this model
+nano .env   # HF_TOKEN is optional for public models
 
-# 3. Run setup
+# 3. Run setup (default: 26B model, same as cluster)
 chmod +x setup-single.sh
 ./setup-single.sh
+
+# Or use 31B multimodal model (slower, ~7 t/s)
+./setup-single.sh --31b
 ```
 
-First run takes **10-30 minutes** (model download: ~16-20GB + whisper model).
+First run takes **15-60 minutes** (model download: ~49GB for 26B, ~20GB for 31B).
 
 ### Model Details
 
-- **Model**: [`nvidia/Gemma-4-31B-IT-NVFP4`](https://huggingface.co/nvidia/Gemma-4-31B-IT-NVFP4) — 30.7B parameters, NVFP4 quantized
-- **Context**: 256K tokens (`--max-model-len 262144`)
-- **Multimodal**: Text + Image (variable resolution) + Video (up to 60s, 1fps)
-- **Tool Calling**: Enabled (`--enable-auto-tool-choice --tool-call-parser gemma4`)
-- **Quantization**: `--quantization modelopt` (NVIDIA Model Optimizer)
-- **License**: NVIDIA Open Model License + Apache 2.0
+**Default — Gemma 4 26B-A4B MoE (same as 2-node cluster):**
+- **Model**: `google/gemma-4-26B-A4B-it` — MoE, 4B active parameters
+- **Quantization**: FP8 online (`--quantization fp8 --kv-cache-dtype fp8`)
+- **Context**: 256K tokens, Tool Calling enabled
+- **TPS**: ~38 t/s
+
+**`--31b` — Gemma-4-31B-IT-NVFP4:**
+- **Model**: [`nvidia/Gemma-4-31B-IT-NVFP4`](https://huggingface.co/nvidia/Gemma-4-31B-IT-NVFP4) — 30.7B dense
+- **Quantization**: `--quantization modelopt` (NVFP4)
+- **Multimodal**: Text + Image + Video (up to 60s, 1fps)
+- **TPS**: ~7 t/s
 
 ### API Endpoints (Single Node)
 
-Same URL structure as the cluster, accessed via nginx on port 80:
+Same URL structure as the cluster, accessed via nginx on port 80. Use `/v1/models` to check the served model name:
 
 ```bash
-# Text chat
+# Check served model
+curl http://<DGX_IP>/v1/models
+
+# Text chat (model name from /v1/models)
 curl http://<DGX_IP>/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "nvidia/Gemma-4-31B-IT-NVFP4",
+    "model": "google/gemma-4-26B-A4B-it",
     "messages": [{"role": "user", "content": "Hello!"}],
     "max_tokens": 256
-  }'
-
-# Multimodal (image)
-curl http://<DGX_IP>/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "nvidia/Gemma-4-31B-IT-NVFP4",
-    "messages": [{"role": "user", "content": [
-      {"type": "text", "text": "Describe this image."},
-      {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}}
-    ]}],
-    "max_tokens": 256
-  }'
-
-# Tool calling
-curl http://<DGX_IP>/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "nvidia/Gemma-4-31B-IT-NVFP4",
-    "messages": [{"role": "user", "content": "What is the weather in Seoul?"}],
-    "tools": [{"type": "function", "function": {"name": "get_weather", "description": "Get weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}}]
   }'
 
 # STT transcription
@@ -377,6 +374,18 @@ cd docker && docker compose -f docker-compose.single.yml down
 > **Note**: The single-node setup and 2-node cluster cannot run simultaneously on the same machine (port conflict on 8000, 9000, 80).
 
 ### Single-Node Memory Budget (128GB unified)
+
+**Default (26B, same as 2-node cluster):**
+
+| Component | Memory | Notes |
+|-----------|--------|-------|
+| Gemma 4 26B-A4B MoE (FP8) | ~49GB | Model weights |
+| vLLM KV cache + overhead | ~41GB | At `gpu_memory_utilization=0.70` |
+| faster-whisper (large-v3-turbo) | ~3-4GB | CTranslate2 GPU |
+| nginx + OS | ~5-10GB | |
+| **Headroom** | **~16-30GB** | Safety margin |
+
+**31B mode (`--31b`):**
 
 | Component | Memory | Notes |
 |-----------|--------|-------|

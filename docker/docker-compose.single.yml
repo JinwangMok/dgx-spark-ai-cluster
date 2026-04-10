@@ -1,14 +1,16 @@
-# Single DGX Spark Setup — Gemma-4-31B-IT-NVFP4 + faster-whisper + nginx
+# Single DGX Spark Setup — LLM + faster-whisper + nginx
 # Usage: docker compose -f docker-compose.single.yml up -d
 #
-# This is a standalone compose file for serving nvidia/Gemma-4-31B-IT-NVFP4
-# (NVFP4 quantized, multimodal) and faster-whisper on a single DGX Spark node.
-# It is separate from the 2-node cluster compose files (docker-compose.node.yml + lb.yml).
+# Default: Gemma 4 26B-A4B MoE (FP8) — same as 2-node cluster
+# With --31b flag in setup-single.sh: Gemma-4-31B-IT-NVFP4 (modelopt)
+#
+# Model-specific settings are controlled via environment variables
+# set by setup-single.sh before running docker compose.
 
 services:
   vllm:
     image: ${VLLM_IMAGE:-vllm/vllm-openai:gemma4-cu130}
-    container_name: gemma4-31b-vllm
+    container_name: ${VLLM_CONTAINER_NAME:-dgx-vllm}
     restart: unless-stopped
     ports:
       - "8000:8000"
@@ -19,13 +21,13 @@ services:
     env_file:
       - ../.env.token
     command: >
-      --model nvidia/Gemma-4-31B-IT-NVFP4
+      --model ${MODEL_ID:-google/gemma-4-26B-A4B-it}
       --port 8000
       --host 0.0.0.0
-      --gpu-memory-utilization ${VLLM_GPU_MEMORY_UTILIZATION:-0.85}
+      --gpu-memory-utilization ${VLLM_GPU_MEMORY_UTILIZATION:-0.70}
       --dtype auto
-      --quantization modelopt
-      --tensor-parallel-size 1
+      --quantization ${VLLM_QUANTIZATION:-fp8}
+      ${VLLM_QUANT_EXTRA_ARGS:---kv-cache-dtype fp8 --load-format safetensors}
       --enable-auto-tool-choice
       --tool-call-parser gemma4
       --reasoning-parser gemma4
