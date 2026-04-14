@@ -163,10 +163,18 @@ echo "  .env.token: generated"
 
 echo ""
 echo "[5/7] Pulling Docker images..."
-docker pull "$VLLM_IMAGE" || { echo "ERROR: Failed to pull vLLM image: $VLLM_IMAGE"; exit 1; }
-echo "  vLLM image: $VLLM_IMAGE pulled"
-docker pull "$VOXCPM_IMAGE" || { echo "ERROR: Failed to pull VoxCPM image: $VOXCPM_IMAGE"; exit 1; }
-echo "  VoxCPM image: $VOXCPM_IMAGE pulled"
+# Skip pull if the image is already present locally — makes re-runs
+# idempotent and survives transient registry/IPv6 outages.
+ensure_image() {
+    local img="$1"
+    if docker image inspect "$img" >/dev/null 2>&1; then
+        echo "  $img: already present"
+        return 0
+    fi
+    docker pull "$img"
+}
+ensure_image "$VLLM_IMAGE" || { echo "ERROR: Failed to pull vLLM image: $VLLM_IMAGE"; exit 1; }
+ensure_image "$VOXCPM_IMAGE" || { echo "ERROR: Failed to pull VoxCPM image: $VOXCPM_IMAGE"; exit 1; }
 
 # Verify quantization backend (only for modelopt/31B)
 if $USE_31B; then
