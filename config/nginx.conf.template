@@ -21,6 +21,7 @@ http {
     # Rate limiting zones
     limit_req_zone $binary_remote_addr zone=llm:10m rate=10r/s;
     limit_req_zone $binary_remote_addr zone=stt:10m rate=5r/s;
+    limit_req_zone $binary_remote_addr zone=tts:10m rate=5r/s;
 
     # --- LLM Backend (vLLM OpenAI-compatible API) ---
     upstream llm_backend {
@@ -34,6 +35,13 @@ http {
         least_conn;
         server ${NODE_A_IP}:9000 max_fails=2 fail_timeout=30s;
         server ${NODE_B_IP}:9000 max_fails=2 fail_timeout=30s;
+    }
+
+    # --- TTS Backend (VoxCPM2) ---
+    upstream tts_backend {
+        least_conn;
+        server ${NODE_A_IP}:9100 max_fails=2 fail_timeout=30s;
+        server ${NODE_B_IP}:9100 max_fails=2 fail_timeout=30s;
     }
 
     server {
@@ -97,6 +105,27 @@ http {
             add_header X-Backend-Server $upstream_addr always;
         }
 
+        # --- TTS API (OpenAI /v1/audio/speech compatible) ---
+        location /tts/ {
+            client_max_body_size 1m;
+            limit_req zone=tts burst=10 nodelay;
+
+            rewrite ^/tts/(.*) /$1 break;
+            proxy_pass http://tts_backend;
+            proxy_http_version 1.1;
+
+            proxy_read_timeout 300s;
+            proxy_send_timeout 300s;
+            proxy_buffering off;
+
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+            # NOTE: Remove this header if exposed to untrusted networks
+            add_header X-Backend-Server $upstream_addr always;
+        }
+
         # --- Health Check (proxied to actual backend) ---
         location /health {
             access_log off;
@@ -107,7 +136,7 @@ http {
         # --- Status Page ---
         location /status {
             access_log off;
-            return 200 '{"service":"dgx-spark-gemma4-cluster","llm":"gemma-4-26B-A4B-it","stt":"faster-whisper-large-v3","nodes":2}';
+            return 200 '{"service":"dgx-spark-gemma4-cluster","llm":"gemma-4-26B-A4B-it","stt":"faster-whisper-large-v3","tts":"voxcpm2","nodes":2}';
             add_header Content-Type application/json;
         }
     }

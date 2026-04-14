@@ -81,3 +81,37 @@ services:
       options:
         max-size: "100m"
         max-file: "3"
+
+  voxcpm:
+    image: ${VOXCPM_IMAGE:-jinwangmok/voxcpm-api-server:latest}
+    container_name: gemma4-voxcpm
+    restart: unless-stopped
+    ports:
+      - "${VOXCPM_PORT:-9100}:9100"
+    volumes:
+      - ${VOXCPM_CACHE_DIR:-/data/models/voxcpm}:/data/models/voxcpm
+    environment:
+      - VOXCPM_MODEL=${VOXCPM_MODEL:-openbmb/VoxCPM2}
+      - VOXCPM_PORT=9100
+      - VOXCPM_CACHE_DIR=/data/models/voxcpm
+      - HF_HOME=/data/models
+    # GPU: Shares the unified memory with vLLM and whisper.
+    # VoxCPM2 (~2B) uses roughly 6-8 GB VRAM during synthesis.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9100/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 300s
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "3"
