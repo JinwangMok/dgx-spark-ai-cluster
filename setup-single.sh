@@ -64,8 +64,11 @@ if [[ -f "$SCRIPT_DIR/.env" ]]; then
 fi
 
 VLLM_IMAGE="${VLLM_IMAGE:-vllm/vllm-openai:gemma4-cu130}"
+VOXCPM_IMAGE="${VOXCPM_IMAGE:-jinwangmok/voxcpm-api-server:latest}"
 MODEL_CACHE_DIR="${MODEL_CACHE_DIR:-/data/models}"
 WHISPER_CACHE_DIR="${WHISPER_CACHE_DIR:-/data/models/whisper}"
+VOXCPM_CACHE_DIR="${VOXCPM_CACHE_DIR:-/data/models/voxcpm}"
+export VOXCPM_IMAGE VOXCPM_CACHE_DIR
 
 echo "=========================================="
 echo "DGX Spark — Single Node Setup"
@@ -140,7 +143,7 @@ echo "  vLLM will use: ~${USABLE_MB} MiB"
 
 echo ""
 echo "[3/7] Preparing model cache directories..."
-for DIR in "$MODEL_CACHE_DIR" "$WHISPER_CACHE_DIR"; do
+for DIR in "$MODEL_CACHE_DIR" "$WHISPER_CACHE_DIR" "$VOXCPM_CACHE_DIR"; do
     if [[ ! -d "$DIR" ]]; then
         mkdir -p "$DIR" 2>/dev/null || sudo mkdir -p "$DIR"
         sudo chown -R "$(id -u):$(id -g)" "$DIR" 2>/dev/null || true
@@ -162,6 +165,8 @@ echo ""
 echo "[5/7] Pulling Docker images..."
 docker pull "$VLLM_IMAGE" || { echo "ERROR: Failed to pull vLLM image: $VLLM_IMAGE"; exit 1; }
 echo "  vLLM image: $VLLM_IMAGE pulled"
+docker pull "$VOXCPM_IMAGE" || { echo "ERROR: Failed to pull VoxCPM image: $VOXCPM_IMAGE"; exit 1; }
+echo "  VoxCPM image: $VOXCPM_IMAGE pulled"
 
 # Verify quantization backend (only for modelopt/31B)
 if $USE_31B; then
@@ -214,6 +219,11 @@ while [[ $ELAPSED -lt $MAX_WAIT ]]; do
         HEALTHY=false
     fi
 
+    # Check voxcpm
+    if ! curl -sf --max-time 5 "http://localhost:9100/health" > /dev/null 2>&1; then
+        HEALTHY=false
+    fi
+
     if $HEALTHY; then
         echo "  All services healthy! (took ${ELAPSED}s)"
         break
@@ -245,6 +255,7 @@ echo ""
 echo "  Endpoints:"
 echo "    LLM API:   http://${NODE_IP}/v1/chat/completions"
 echo "    STT API:   http://${NODE_IP}/stt/v1/audio/transcriptions"
+echo "    TTS API:   http://${NODE_IP}/tts/v1/audio/speech"
 echo "    Health:    http://${NODE_IP}/health"
 echo "    Status:    http://${NODE_IP}/status"
 echo "    Models:    http://${NODE_IP}/v1/models"
@@ -252,6 +263,7 @@ echo ""
 echo "  Direct ports (without nginx):"
 echo "    vLLM:      http://${NODE_IP}:8000"
 echo "    Whisper:   http://${NODE_IP}:9000"
+echo "    VoxCPM:    http://${NODE_IP}:9100"
 echo ""
 echo "  Verify from remote machine:"
 echo "    ./verify-remote.sh ${NODE_IP}"
